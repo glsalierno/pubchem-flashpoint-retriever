@@ -34,14 +34,14 @@ function results = fetchFlashPoints(cas_numbers)
         cas_numbers = {cas_numbers};
     end
     
-    % Create a temporary file to store CAS numbers (one per line for Python stdin)
+    % Create a temporary file to store CAS numbers
     temp_file = tempname;
     fid = fopen(temp_file, 'w');
     fprintf(fid, '%s\n', cas_numbers{:});
     fclose(fid);
     
-    % Call the Python script with stdin redirection
-    [status, output] = system(sprintf('python get_fp2.py < %s', temp_file));
+    % Call the Python script
+    [status, output] = system(sprintf('get_fp2.py < %s', temp_file));
     
     % Delete the temporary file
     delete(temp_file);
@@ -52,17 +52,9 @@ function results = fetchFlashPoints(cas_numbers)
     end
     
     % Parse the JSON output from Python
-    results_struct = jsondecode(output);
+    results = jsondecode(output);
     
-    % Convert the results to a more MATLAB-friendly format: cell array of {CAS, flash_points}
-    results = cell(length(cas_numbers), 2);
-    for i = 1:length(cas_numbers)
-        cas = cas_numbers{i};
-        results{i,1} = cas;
-        if isfield(results_struct, cas)
-            results{i,2} = results_struct.(cas);
-        else
-            results{i,2} = {};
-        end
-    end
+    % Convert the results to a more MATLAB-friendly format
+    results = struct2cell(results);
+    results = [cas_numbers', results];
 end
