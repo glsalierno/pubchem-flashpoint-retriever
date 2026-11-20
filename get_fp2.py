@@ -19,35 +19,33 @@
 # - Batch processing via stdin for efficiency.
 # - Extracts from 'Flash Point' subsection; returns all available strings (may include units/conditions).
 # - Handles API errors gracefully (returns empty list for failures).
-# - No rate limiting implemented; add sleeps for large batches to comply with PubChem terms.
+# - Requests are paced and have bounded retries for transient PubChem responses.
 #
 # Author: glsalierno
 # Date: September 2025
 
 import sys
 import json
+import logging
+from urllib.parse import quote
+from pubchem_http import pubchem_get
 import requests
 
+LOG = logging.getLogger(__name__)
+TIMEOUT = 30
+
 def get_compound_id_from_cas(cas_number):
-    url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{cas_number}/cids/JSON"
-    response = requests.get(url)
-    
-    if response.status_code != 200:
-        return None
-    
-    data = json.loads(response.text)
-    if 'IdentifierList' in data and 'CID' in data['IdentifierList']:
-        return str(data['IdentifierList']['CID'][0])
+    url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{quote(cas_number, safe='')}/cids/JSON"
+    data = pubchem_get(url, timeout=TIMEOUT, context=f"CAS {cas_number}: CID lookup").json()
+    cids = data.get("IdentifierList", {}).get("CID", [])
+    if cids:
+        return str(cids[0])
+    LOG.warning("CAS %s: PubChem returned no CID", cas_number)
     return None
 
 def get_flash_points(compound_id):
     url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/{compound_id}/JSON"
-    response = requests.get(url)
-    
-    if response.status_code != 200:
-        return []
-    
-    data = json.loads(response.text)
+    data = pubchem_get(url, timeout=TIMEOUT, context=f"CID {compound_id}: flash point").json()
     flash_points = []
     
     if 'Record' in data and 'Section' in data['Record']:
@@ -61,7 +59,7 @@ def get_flash_points(compound_id):
                                     if property_section.get('TOCHeading') == 'Flash Point':
                                         if 'Information' in property_section:
                                             for info in property_section['Information']:
-                                                value = info.get('Value', {}).get('StringWithMarkup', [{}])[0].get('String')
+                                                value = (info.get('Value', {}).get('StringWithMarkup') or [{}])[0].get('String')
                                                 if value:
                                                     flash_points.append(value)
     return flash_points
@@ -69,15 +67,16 @@ def get_flash_points(compound_id):
 def process_cas_numbers(cas_numbers):
     results = {}
     for cas in cas_numbers:
-        compound_id = get_compound_id_from_cas(cas)
-        if compound_id:
-            flash_points = get_flash_points(compound_id)
-            results[cas] = flash_points
-        else
+        try:
+            compound_id = get_compound_id_from_cas(cas)
+            results[cas] = get_flash_points(compound_id) if compound_id else []
+        except (requests.RequestException, ValueError, TypeError, AttributeError, KeyError, IndexError) as e:
+            LOG.warning("CAS %s: could not retrieve flash point: %s", cas, e)
             results[cas] = []
     return results
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     # Read CAS numbers from stdin (one per line)
     cas_numbers = [line.strip() for line in sys.stdin if line.strip()]
     results = process_cas_numbers(cas_numbers)

@@ -41,7 +41,17 @@ function results = fetchFlashPoints(cas_numbers)
     fclose(fid);
     
     % Call the Python script
-    [status, output] = system(sprintf('get_fp2.py < %s', temp_file));
+    script_path = fullfile(fileparts(mfilename('fullpath')), 'get_fp2.py');
+    log_file = tempname;
+    [status, output] = system(sprintf('python "%s" < "%s" 2> "%s"', ...
+        script_path, temp_file, log_file));
+    if isfile(log_file)
+        diagnostics = strtrim(fileread(log_file));
+        delete(log_file);
+        if ~isempty(diagnostics)
+            warning('fetchFlashPoints:PubChem', '%s', diagnostics);
+        end
+    end
     
     % Delete the temporary file
     delete(temp_file);
